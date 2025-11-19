@@ -38,32 +38,40 @@ class Pskintsugitax extends Module
 
     public function getContent()
     {
+        $output = '';
         // Save configuration
         if (Tools::isSubmit('submit_'.$this->name)) {
             Configuration::updateValue('KINTSUGI_API_KEY', Tools::getValue('KINTSUGI_API_KEY'));
             Configuration::updateValue('KINTSUGI_ORG_ID', Tools::getValue('KINTSUGI_ORG_ID'));
-            $this->confirmations[] = $this->l('Configuration updated');
+            $output .= $this->displayConfirmation($this->l('Configuration updated'));
         }
         $this->context->smarty->assign([
             'kintsugi_api_key' => Configuration::get('KINTSUGI_API_KEY', ''),
             'kintsugi_org_id' => Configuration::get('KINTSUGI_ORG_ID', '')
         ]);
-        return $this->display(__FILE__, 'views/templates/admin/config.tpl');
+        return $output . $this->display(__FILE__, 'views/templates/admin/config.tpl');
     }
 
     /**
-     * Example: Recalculate tax each time cart is saved.
+     * Recalculate tax each time cart is saved.
      */
     public function hookActionCartSave($params)
     {
+        if (empty($params['cart'])) {
+            return;
+        }
         $cart = $params['cart'];
         $customer = new Customer($cart->id_customer);
         $address = new Address($cart->id_address_delivery);
 
         $apiKey = Configuration::get('KINTSUGI_API_KEY');
         $orgId = Configuration::get('KINTSUGI_ORG_ID');
-        $service = new KintsugiApiService($apiKey, $orgId);
 
+        if (!$apiKey || !$orgId) {
+            return;
+        }
+
+        $service = new KintsugiApiService($apiKey, $orgId);
         $cartData = $this->buildCartData($cart);
 
         $shippingAddress = [
@@ -75,19 +83,22 @@ class Pskintsugitax extends Module
 
         try {
             $response = $service->estimateTax($cartData, $shippingAddress);
-            // Save the tax amount in cart (as custom cart field, cart rule, or in context - to be expanded on full implementation)
+            // Store the tax amount in the cookie - for production consider storing in the cart or a custom table
             $this->context->cookie->__set('kintsugi_tax', $response['tax_amount']);
         } catch (Exception $e) {
-            // Optionally, handle errors/logging
+            // Optionally, log error
+            $this->context->cookie->__unset('kintsugi_tax');
         }
     }
 
     /**
-     * Display tax in cart/checkout.
+     * Display Kintsugi tax in the cart/checkout
      */
     public function hookDisplayShoppingCartFooter($params)
     {
-        if (!isset($this->context->cookie->kintsugi_tax)) return '';
+        if (!isset($this->context->cookie->kintsugi_tax)) {
+            return '';
+        }
         $tax = $this->context->cookie->kintsugi_tax;
         $this->context->smarty->assign('kintsugi_tax', $tax);
         return $this->display(__FILE__, 'views/templates/admin/cart_tax.tpl');
@@ -96,12 +107,12 @@ class Pskintsugitax extends Module
     // Hook after order placement for transaction sync (not implemented in skeleton)
     public function hookActionValidateOrder($params)
     {
-        // Here you could POST to Kintsugi /v1/transactions after order confirmation
+        // (For extension: you can POST to Kintsugi /v1/transactions after order confirmation)
     }
 
     public function buildCartData($cart)
     {
-        // Gets cart details and line_items in Kintsugi format
+        // Get cart details and line_items for Kintsugi
         $products = $cart->getProducts();
         $items = [];
         $subtotal = 0;
